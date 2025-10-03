@@ -1,0 +1,75 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "shortform"
+version = "0.1.0"
+description = "Automated short-form video creation tool with audio alignment and overlay compositing"
+readme = "README.md"
+requires-python = ">=3.8"
+authors = [
+    {name = "Keo Shortform Factory"},
+]
+dependencies = [
+    "librosa>=0.10.0",
+    "numpy>=1.21.0",
+    "pyyaml>=6.0",
+    "typer>=0.9.0",
+    "tqdm>=4.64.0",
+    "pillow>=9.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "black>=22.0.0",
+    "isort>=5.10.0",
+    "flake8>=4.0.0",
+]
+
+captions = [
+    "openai-whisper>=20231117",
+]
+
+scenes = [
+    "scenedetect>=0.6.0",
+]
+
+[project.scripts]
+shortform = "src.cli:main"
+
+[tool.hatch.envs.default]
+dependencies = [
+    "librosa",
+    "numpy",
+    "pyyaml",
+    "typer",
+    "tqdm",
+    "pillow",
+]
+
+[tool.hatch.envs.dev]
+dependencies = [
+    "librosa",
+    "numpy",
+    "pyyaml",
+    "typer",
+    "tqdm",
+    "pillow",
+    "pytest",
+    "black",
+    "isort",
+    "flake8",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.black]
+line-length = 88
+target-version = ['py38']
+
+[tool.isort]
+profile = "black"
+line_length = 88

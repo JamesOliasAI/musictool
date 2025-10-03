@@ -1,0 +1,46 @@
+# TikTok Vertical (9:16) Preset for Keo Shortform Factory
+# Optimized for TikTok/Reels vertical format
+
+# Audio normalization target
+target_lufs: -14
+
+# Overlay configuration
+overlay:
+  position: top-right   # top-left, top-right, bottom-left, bottom-right, center or "x,y"
+  opacity: 0.9
+  margin_px: 24
+
+# Slicing configuration
+slicing:
+  clip_len: 20      # Length of each clip in seconds
+  stride: 18        # Overlap between clips in seconds
+  min_conf: 0.15    # Minimum alignment confidence threshold
+
+# Export configuration
+export:
+  ratio: "9:16"     # Target aspect ratio
+  quality_ladder:
+    - codec: "libx264"
+      crf: 20         # Quality (lower = better, 0-51)
+      preset: "veryfast"  # Encoding speed vs compression
+    - codec: "prores_ks"
+      profile: 3      # ProRes 422 for archive masters (optional)
+
+# Brand defaults (customize these for your content)
+brand:
+  fonts:
+    primary: "Arial-Bold"
+    fallback: "Helvetica-Bold"
+  colors:
+    primary: "#FFFFFF"
+    secondary: "#000000"
+    stroke: "#000000"
+    stroke_width: 2
+  watermark:
+    text: "Your Brand"
+    position: "bottom-right"
+    margin_px: 16
+    opacity: 0.7
+  safe_areas:
+    top_margin: 24    # Avoid TikTok UI
+    bottom_margin: 48 # Avoid captions area
