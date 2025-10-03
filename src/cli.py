@@ -16,12 +16,16 @@ from .io_ops import validate_media_compatibility, probe_media, extract_audio, pr
 from .utils import validate_file_exists
 from .audio_align import align_audio
 from .video_ops import replace_audio, composite_overlay
-from .cutter import slice_video
+from .cutter import slice_video, generate_clip_starts
 from .exporter import export_clips
+from .scenes import detect_scenes, merge_scenes_with_windows
+from .hook_finder import find_hooks, bias_starts_to_hooks
+from .captions import generate_captions_whisper, burn_captions
 
 app = typer.Typer()
 
 
+@app.command("process")
 @app.command()
 def main(
     base: str = typer.Option(..., "--base", "-b", help="Path to base long-form video"),
@@ -32,6 +36,8 @@ def main(
     clip_len: int = typer.Option(20, "--clip-len", "-l", help="Clip length in seconds"),
     clip_stride: int = typer.Option(18, "--clip-stride", "-s", help="Clip stride in seconds"),
     scene_detect: bool = typer.Option(False, "--scene-detect", help="Enable scene detection for better cuts"),
+    hook_detect: bool = typer.Option(False, "--hook-detect", help="Enable hook detection for engaging clips"),
+    captions: bool = typer.Option(False, "--captions", help="Generate and burn captions"),
     min_conf: float = typer.Option(0.15, "--min-conf", "-c", help="Minimum alignment confidence threshold"),
     ratio: str = typer.Option("9:16", "--ratio", "-r", help="Export aspect ratio (9:16, 1:1, or 16:9)"),
     position: str = typer.Option("top-right", "--position", help="Overlay position"),
@@ -62,9 +68,12 @@ def main(
     config["slicing"]["clip_len"] = clip_len
     config["slicing"]["stride"] = clip_stride
     config["slicing"]["min_conf"] = min_conf
+    config["slicing"]["scene_detect"] = scene_detect
+    config["slicing"]["hook_detect"] = hook_detect
     config["export"]["ratio"] = ratio
     config["overlay"]["position"] = position
     config["overlay"]["opacity"] = opacity
+    config["captions"]["enabled"] = captions
 
     # Validate inputs
     typer.echo("🔍 Validating inputs...")
@@ -124,14 +133,58 @@ def main(
         config=config
     )
 
-    # Slice into clips
+    # Slice into clips with optional scene detection and hook finding
     typer.echo("✂️  Slicing master video into clips...")
-    from .cutter import slice_video
-    clips = slice_video(
-        video_path=str(master_video),
-        output_dir=str(clips_src_dir),
-        config=config
-    )
+
+    # Generate base clip starts
+    duration = probe_media(str(master_video))["duration"]
+    window_starts = generate_clip_starts(duration, clip_len, clip_stride)
+
+    # Apply scene detection if enabled
+    if scene_detect:
+        typer.echo("🎬 Applying scene detection...")
+        scene_times = detect_scenes(str(master_video), threshold=30.0, min_scene_len=2.0)
+        window_starts = merge_scenes_with_windows(
+            scene_times, window_starts, clip_len, max_clips=None
+        )
+
+    # Apply hook detection if enabled
+    if hook_detect:
+        typer.echo("🎯 Finding engaging hooks...")
+        hooks = find_hooks(
+            alignment_result["shifted_audio_path"],
+            duration,
+            clip_len=clip_len,
+            num_hooks=len(window_starts)
+        )
+        window_starts = bias_starts_to_hooks(window_starts, hooks, attraction_radius=5.0)
+
+    # Create clips from optimized start times
+    from .cutter import create_clip
+    clips = []
+    for i, start_time in enumerate(window_starts):
+        clip_path = create_clip(
+            str(master_video),
+            str(clips_src_dir),
+            start_time,
+            clip_len,
+            i
+        )
+        if clip_path:
+            clips.append(clip_path)
+
+    # Generate captions if enabled
+    captions_path = None
+    if captions:
+        typer.echo("🎤 Generating captions...")
+        captions_path = generate_captions_whisper(
+            alignment_result["shifted_audio_path"],
+            str(session_dir),
+            model_size="base",
+            language="en"
+        )
+        if captions_path:
+            typer.echo(f"✅ Captions generated: {captions_path}")
 
     # Export in target ratio
     typer.echo(f"📤 Exporting {len(clips)} clips in {ratio} ratio...")
@@ -155,11 +208,17 @@ def main(
                 "overlay_audio": overlay_audio,
             },
             "config": config,
+            "features": {
+                "scene_detection": scene_detect,
+                "hook_detection": hook_detect,
+                "captions": captions
+            },
             "alignment": alignment_result,
             "processing": {
                 "master_video": str(master_video),
                 "clips_count": len(clips),
                 "exports_count": len(exported_clips),
+                "captions_file": captions_path
             },
             "outputs": {
                 "clips_src": [str(c) for c in clips],
@@ -173,6 +232,74 @@ def main(
 
     typer.echo(f"✅ Complete! Processed into {len(exported_clips)} clips")
     typer.echo(f"📁 Output: {session_dir}")
+
+    return manifest_data
+
+
+@app.command("batch")
+def batch_process(
+    csv: str = typer.Option(None, "--csv", "-c", help="CSV file with batch jobs"),
+    folder: str = typer.Option(None, "--folder", "-f", help="Folder with base videos"),
+    overlay_video: str = typer.Option(None, "--overlay-video", "-ov", help="Overlay video (for folder mode)"),
+    overlay_audio: str = typer.Option(None, "--overlay-audio", "-oa", help="Overlay audio (for folder mode)"),
+    preset: str = typer.Option("presets/tiktok_vertical.yaml", "--preset", "-p", help="Default preset"),
+    out: str = typer.Option(..., "--out", "-o", help="Output root directory"),
+    workers: int = typer.Option(2, "--workers", "-w", help="Number of parallel workers"),
+):
+    """Process multiple videos in batch mode."""
+    from .batch_processor import BatchProcessor, create_batch_from_folder
+
+    if csv:
+        typer.echo(f"📄 Loading batch jobs from CSV: {csv}")
+        processor = BatchProcessor(preset, out, max_workers=workers)
+        processor.load_from_csv(csv, base_preset=preset)
+
+    elif folder and overlay_video and overlay_audio:
+        typer.echo(f"📁 Creating batch from folder: {folder}")
+        processor = create_batch_from_folder(
+            folder, overlay_video, overlay_audio, preset, out
+        )
+
+    else:
+        typer.echo("❌ Must provide either --csv or (--folder + --overlay-video + --overlay-audio)")
+        raise typer.Exit(1)
+
+    if len(processor.jobs) == 0:
+        typer.echo("⚠️  No jobs to process")
+        raise typer.Exit(0)
+
+    typer.echo(f"\n🚀 Starting batch processing of {len(processor.jobs)} jobs...")
+
+    summary = processor.process_all()
+
+    typer.echo(f"\n✅ Batch complete!")
+    typer.echo(f"   Completed: {summary['completed']}")
+    typer.echo(f"   Failed: {summary['failed']}")
+    typer.echo(f"   Output: {out}")
+
+
+def process_video(
+    base: str,
+    overlay_video: str,
+    overlay_audio: str,
+    out: str,
+    preset: str,
+    manifest: bool = True,
+    **kwargs
+) -> Dict[str, Any]:
+    """
+    Helper function to process a single video.
+    Used by batch processor and CLI.
+    """
+    return main(
+        base=base,
+        overlay_video=overlay_video,
+        overlay_audio=overlay_audio,
+        out=out,
+        preset=preset,
+        manifest=manifest,
+        **kwargs
+    )
 
 
 if __name__ == "__main__":

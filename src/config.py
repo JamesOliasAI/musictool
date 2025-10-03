@@ -17,7 +17,14 @@ def get_default_config() -> Dict[str, Any]:
         "slicing": {
             "clip_len": 20,
             "stride": 18,
-            "min_conf": 0.15
+            "min_conf": 0.15,
+            "scene_detect": False,
+            "hook_detect": False
+        },
+        "captions": {
+            "enabled": False,
+            "model": "base",
+            "language": "en"
         },
         "export": {
             "ratio": "9:16",
